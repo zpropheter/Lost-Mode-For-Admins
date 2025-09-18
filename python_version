@@ -4,9 +4,9 @@ import time
 import webview
 
 # ---------------- Config ----------------
-URL = "https://zpropheter.jamfcloud.com"
-CLIENT_ID = "69109354-52ba-41c8-9186-cda5ce860419"
-CLIENT_SECRET = "yMfchn-bvW_7sgmXhO3g7yc6AbjG0HMSLc-POMytz7DsD-H0PNCi5B2V0XnURAAD"
+URL = "$4"
+CLIENT_ID = "$5
+CLIENT_SECRET = "$6"
 
 access_token = None
 token_expiration_epoch = 0
