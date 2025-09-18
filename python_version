@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+import requests
+import time
+import webview
+
+# ---------------- Config ----------------
+URL = "https://zpropheter.jamfcloud.com"
+CLIENT_ID = "69109354-52ba-41c8-9186-cda5ce860419"
+CLIENT_SECRET = "yMfchn-bvW_7sgmXhO3g7yc6AbjG0HMSLc-POMytz7DsD-H0PNCi5B2V0XnURAAD"
+
+access_token = None
+token_expiration_epoch = 0
+
+# ---------------- Token Management ----------------
+def get_access_token():
+    global access_token, token_expiration_epoch
+    token_url = f"{URL}/api/oauth/token"
+    response = requests.post(
+        token_url,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": CLIENT_ID,
+            "grant_type": "client_credentials",
+            "client_secret": CLIENT_SECRET,
+        },
+    )
+    if response.status_code == 200:
+        token_data = response.json()
+        access_token = token_data["access_token"]
+        expires_in = token_data["expires_in"]
+        token_expiration_epoch = int(time.time()) + expires_in - 1
+    else:
+        raise Exception(f"Failed to get token: {response.status_code} {response.text}")
+
+def ensure_token_valid():
+    if int(time.time()) >= token_expiration_epoch:
+        get_access_token()
+
+# ---------------- API Calls ----------------
+def get_lostmode_devices():
+    ensure_token_valid()
+    url = f"{URL}/api/v2/mobile-devices/detail"
+    params = {
+        "section": ["USER_AND_LOCATION", "SECURITY"],
+        "page": 0,
+        "page-size": 100,
+        "filter": "lostModeEnabled==true"
+    }
+    headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {access_token}"
+    }
+    resp = requests.get(url, headers=headers, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+
+    devices = {}
+    for d in data.get("results", []):
+        email = d.get("userAndLocation", {}).get("emailAddress", "unknown@unknown")
+        real_name = d.get("userAndLocation", {}).get("realName", "Unknown")
+        sec = d.get("security", {}).get("lostModeLocation", {})
+        lat = sec.get("lostModeLocationLatitude")
+        lon = sec.get("lostModeLocationLongitude")
+        if lat and lon:
+            label = f"{real_name} ({email})"
+            devices[label] = (lat, lon)
+    return devices
+
+# ---------------- WebView API ----------------
+class ApiBridge:
+    def refresh_devices(self):
+        """Return the latest devices with Lost Mode enabled"""
+        return get_lostmode_devices()
+
+# ---------------- HTML UI ----------------
+def build_html(devices):
+    options_html = ""
+    for label, (lat, lon) in devices.items():
+        options_html += f'<option value="{lat},{lon}">{label}</option>\n'
+
+    first_device = list(devices.values())[0]
+    html = f"""
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Lost Mode Devices</title>
+      <style>
+        body {{ font-family: sans-serif; text-align: center; margin: 20px; }}
+        select {{ font-size: 16px; padding: 5px; }}
+        button {{ font-size: 16px; padding: 5px 10px; margin-left: 10px; }}
+        iframe {{ margin-top: 20px; border: 0; width: 100%; height: 600px; }}
+      </style>
+      <script>
+        async function refreshDevices() {{
+          let select = document.getElementById("deviceSelect");
+          let currentValue = select.value;
+
+          let devices = await window.pywebview.api.refresh_devices();
+          select.innerHTML = "";
+
+          let found = false;
+          for (let label in devices) {{
+            let coords = devices[label];
+            let option = document.createElement("option");
+            option.value = coords[0] + "," + coords[1];
+            option.text = label;
+            if (option.value === currentValue) {{
+              option.selected = true;
+              found = true;
+            }}
+            select.add(option);
+          }}
+
+          if (!found && select.options.length > 0) {{
+            select.options[0].selected = true;
+          }}
+
+          updateMap();
+        }}
+
+        function updateMap() {{
+          let select = document.getElementById("deviceSelect");
+          let coords = select.value;
+          let iframe = document.getElementById("mapFrame");
+          iframe.src = "https://www.google.com/maps?q=" + coords + "&output=embed";
+        }}
+
+        // Auto-refresh every 5 minutes
+        setInterval(refreshDevices, 300000);
+      </script>
+    </head>
+    <body>
+      <h2>Lost Mode Device Selector</h2>
+      <select id="deviceSelect" onchange="updateMap()">
+        {options_html}
+      </select>
+      <button onclick="refreshDevices()">🔄 Refresh</button>
+      <iframe id="mapFrame" src="https://www.google.com/maps?q={first_device[0]},{first_device[1]}&output=embed"></iframe>
+    </body>
+    </html>
+    """
+    return html
+
+# ---------------- Main ----------------
+if __name__ == "__main__":
+    get_access_token()
+    devices = get_lostmode_devices()
+    if not devices:
+        print("No Lost Mode devices found.")
+        exit(0)
+
+    bridge = ApiBridge()
+    html = build_html(devices)
+    webview.create_window("Lost Mode Devices", html=html, js_api=bridge)
+    webview.start()
